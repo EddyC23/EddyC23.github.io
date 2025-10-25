@@ -172,7 +172,7 @@
           <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Cost</th>
         </tr>
       </thead>
-      <tbody id="anomaly-table-body" class="bg-white divide-y divide-gray-200"></tbody>
+      <tbody id="anomaly-table-body" class="bg-white divide-y divide-gray-20Gg00"></tbody>
     </table>
   </div>
 </section>
@@ -265,8 +265,14 @@
             const flip = false; 
             webcam = new tmImage.Webcam(200, 200, flip);
 
-            // Reverted to original setup() call, will use browser default
-            await webcam.setup(); 
+            // --- ADDED CONSTRAINTS to explicitly request rear camera ---
+            const constraints = {
+                video: {
+                    facingMode: "environment" // 'environment' = rear camera, 'user' = front camera
+                }
+            };
+            await webcam.setup(constraints); // Pass constraints to setup
+            // --- End of modification ---
 
             await webcam.play();
 
