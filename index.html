@@ -261,17 +261,38 @@
             model = await tmImage.load(modelURL, metadataURL);
             maxPredictions = model.getTotalClasses();
 
-            // MODIFIED: Set flip to false (better for rear camera)
+            // MODIFIED: Set flip to false (correct for rear camera)
             const flip = false; 
             webcam = new tmImage.Webcam(200, 200, flip);
 
-            // --- ADDED CONSTRAINTS to explicitly request rear camera ---
+            // --- MODIFIED CONSTRAINTS to be more explicit and robust ---
             const constraints = {
                 video: {
-                    facingMode: "environment" // 'environment' = rear camera, 'user' = front camera
+                    facingMode: { 
+                        exact: "environment" // Use 'exact' to force rear camera
+                    }
                 }
             };
-            await webcam.setup(constraints); // Pass constraints to setup
+            
+            try {
+                await webcam.setup(constraints); // Pass constraints to setup
+            } catch (e) {
+                // If 'exact' fails, fall back to the simple 'environment'
+                console.warn("Could not get 'exact' environment camera, trying default.");
+                const fallbackConstraints = {
+                    video: {
+                        facingMode: "environment"
+                    }
+                };
+                try {
+                    await webcam.setup(fallbackConstraints);
+                } catch (e2) {
+                    // If that *also* fails, just call setup without constraints
+                    // and let the browser/user decide (will likely be front camera)
+                    console.warn("Could not get 'environment' camera, falling back to default.");
+                    await webcam.setup(); // Let the user choose
+                }
+            }
             // --- End of modification ---
 
             await webcam.play();
@@ -638,7 +659,7 @@
 
             let rowBgClass = 'hover:bg-indigo-50/50';
             if (item.severity === 'Severe') { rowBgClass = 'hover:bg-red-100/70'; }
-            else if (item.severity === 'Moderate') rowBgClass = 'hover:bg-amber-50/50';
+            else if (item.severity === 'Moderate') rowBgClass = 'hover:bg-amber-50/5D/50';
             else if (item.severity === 'Minor') rowBgClass = 'hover:bg-emerald-50/50';
 
             row.classList.add(...[rowBgClass, 'transition', 'duration-150', 'cursor-pointer']);
