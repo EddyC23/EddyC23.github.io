@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>RoadAI: Automated Detection and Prioritization (College Station)</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap" rel="stylesheet">
+
+  <!-- Leaflet -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- Teachable Machine Libraries -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+
+  <style>
+    body { font-family: 'Inter', sans-serif; background-color: #f7f9fb; }
+    #map { height: 70vh; width: 100%; border-radius: 0.75rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+    .icon-severe, .icon-moderate, .icon-minor {
+      width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      color: white; border: 2px solid white; box-shadow: 0 2px 5px rgba(0,0,0,0.4);
+    }
+    .icon-severe { background-color: #dc2626; }
+    .icon-moderate { background-color: #f59e0b; }
+    .icon-minor { background-color: #10b981; }
+    .legend { background:#fff; padding:6px 8px; box-shadow:0 0 15px rgba(0,0,0,0.2); border-radius:5px; }
+    .legend i { width:18px; height:18px; float:left; margin-right:8px; opacity:0.7; border-radius:50%; border:2px solid white; }
+    #loading-overlay {
+      position:absolute; inset:0; background-color:rgba(255,255,255,0.8);
+      z-index:50; display:flex; flex-direction:column; align-items:center; justify-content:center;
+      border-radius:0.75rem; opacity:0; transition:opacity .3s ease-in-out; pointer-events:none;
+    }
+    #loading-overlay.visible { opacity:1; pointer-events:auto; }
+    /* Styles for Webcam area */
+    #webcam-container canvas { border-radius: 0.5rem; }
+    #label-container div {
+      padding: 0.25rem 0.5rem;
+      border-radius: 0.375rem;
+      margin-top: 0.5rem;
+      font-weight: 600;
+      font-size: 0.875rem;
+      background-color: #f3f4f6;
+    }
+  </style>
+</head>
+
+<body class="p-4 md:p-8">
+
+<header class="mb-8 flex flex-col md:flex-row justify-between items-center">
+  <div>
+    <h1 class="text-3xl md:text-4xl font-extrabold text-gray-900 flex items-center">
+      RoadAI <span class="text-xl font-medium text-indigo-600 ml-2">College Station Dashboard</span>
+    </h1>
+    <p class="text-gray-600 mt-1">Real-time severity assessment and maintenance prioritization.</p>
+  </div>
+
+  <button id="detection-button"
+    class="mt-4 md:mt-0 px-6 py-3 bg-indigo-600 text-white font-bold rounded-lg shadow-xl hover:bg-indigo-700 transition duration-300 flex items-center">
+    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5 mr-2">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M15.042 21.672 13.684 15.65a2.25 2.25 0 0 1-.599-1.591v-2.903m0-1.834h-2.5m10.232 4.05v.243l-2.757 2.757m0-7.382H13.684m5.253 10.158a10.5 10.5 0 1 1-20.081-3.214m2.022 3.214 2.103-2.103" />
+    </svg>
+    Start Webcam Detection
+  </button>
+</header>
+
+<!-- Stats Cards -->
+<section id="stats" class="grid grid-cols-1 md:grid-cols-6 gap-4 mb-8">
+  <div class="bg-white p-6 rounded-xl shadow-lg border border-gray-100 md:col-span-2">
+    <p class="text-sm font-medium text-gray-500">Total Anomalies / Total Est. Cost</p>
+    <p id="total-anomalies" class="text-3xl font-bold text-gray-900 mt-1">--</p>
+    <p id="total-cost" class="text-xl font-semibold text-indigo-600">--</p>
+  </div>
+
+  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-red-500">
+    <p class="text-sm font-medium text-gray-500">Severe (P1)</p>
+    <p id="severe-count" class="text-3xl font-bold text-red-600 mt-1">--</p>
+    <p id="severe-cost" class="text-sm font-medium text-gray-500">Cost: --</p>
+  </div>
+
+  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-amber-500">
+    <p class="text-sm font-medium text-gray-500">Moderate (P2)</p>
+    <p id="moderate-count" class="text-3xl font-bold text-amber-600 mt-1">--</p>
+    <p id="moderate-cost" class="text-sm font-medium text-gray-500">Cost: --</p>
+  </div>
+
+  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500">
+    <p class="text-sm font-medium text-gray-500">Minor (P3)</p>
+    <p id="minor-count" class="text-3xl font-bold text-emerald-600 mt-1">--</p>
+    <p id="minor-cost" class="text-sm font-medium text-gray-500">Cost: --</p>
+  </div>
+
+  <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-gray-300 hidden md:block">
+    <p class="text-sm font-medium text-gray-500">Detection Type</p>
+    <p class="text-2xl font-bold text-gray-900 mt-1">Webcam (TM)</p>
+    <p class="text-sm font-medium text-gray-500">Client-Side ML</p>
+  </div>
+</section>
+
+<!-- Filters + Map -->
+<section class="grid grid-cols-1 lg:grid-cols-4 gap-4">
+  <div class="flex flex-col gap-4 lg:col-span-1">
+    <!-- Webcam Detection Panel (New) -->
+    <div class="bg-white p-6 rounded-xl shadow-xl h-fit">
+        <h2 class="text-xl font-semibold text-gray-800 mb-4 border-b pb-2">Live Webcam Detection</h2>
+        <p class="text-sm text-gray-600 mb-3">Pointing the camera at road damage will generate a new anomaly record on the map.</p>
+        <div id="webcam-container" class="mx-auto w-[200px] h-[200px] mb-4 overflow-hidden border border-gray-300 rounded-lg"></div>
+        <div id="label-container"></div>
+    </div>
+
+    <!-- Filters Panel (Existing) -->
+    <div class="bg-white p-6 rounded-xl shadow-xl h-fit">
+      <h2 class="text-xl font-semibold text-gray-800 mb-4 border-b pb-2">Filter Anomalies</h2>
+      <div class="mb-6">
+        <p class="font-medium text-gray-700 mb-2">Severity Level:</p>
+        <div id="severity-filters" class="space-y-2">
+          <label class="flex items-center text-red-600">
+            <input type="checkbox" checked value="Severe" onchange="applyFilters()" class="h-5 w-5 text-red-600 rounded-md border-red-300">
+            <span class="ml-2 font-medium">Severe (P1)</span>
+          </label>
+          <label class="flex items-center text-amber-600">
+            <input type="checkbox" checked value="Moderate" onchange="applyFilters()" class="h-5 w-5 text-amber-600 rounded-md border-amber-300">
+            <span class="ml-2 font-medium">Moderate (P2)</span>
+          </label>
+          <label class="flex items-center text-emerald-600">
+            <input type="checkbox" checked value="Minor" onchange="applyFilters()" class="h-5 w-5 text-emerald-600 rounded-md border-emerald-300">
+            <span class="ml-2 font-medium">Minor (P3)</span>
+          </label>
+        </div>
+      </div>
+      <div>
+        <p class="font-medium text-gray-700 mb-2">Min. Estimated Cost:</p>
+        <input type="range" id="cost-slider" min="0" max="4000" value="0" step="100"
+          class="w-full h-2 bg-gray-200 rounded-lg cursor-pointer"
+          oninput="updateCostValue(this.value); applyFilters();">
+        <p class="text-sm text-gray-600 mt-1">Threshold: <span id="cost-value" class="font-bold text-indigo-600">$0</span></p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Map -->
+  <div class="bg-white p-2 rounded-xl shadow-xl lg:col-span-3 relative">
+    <h2 class="text-xl font-semibold text-gray-800 mb-4 px-4 pt-2">Prioritized Damage Locations</h2>
+    <div id="map"></div>
+    <div id="loading-overlay">
+      <div class="text-center">
+        <svg class="animate-spin h-8 w-8 text-indigo-600 mx-auto" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+        </svg>
+        <p class="mt-2 text-indigo-700 font-semibold">Activating webcam and loading Teachable Machine model...</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- Table -->
+<section class="bg-white p-6 rounded-xl shadow-xl mt-8">
+  <h2 class="text-xl font-semibold text-gray-800 mb-4">Anomaly Log (Prioritized)</h2>
+  <div class="overflow-y-auto max-h-[400px]">
+    <table id="anomaly-table" class="min-w-full divide-y divide-gray-200">
+      <thead class="bg-gray-50 sticky top-0 z-10">
+        <tr>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Road</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Severity</th>
+          <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Priority</th>
+          <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Est. Cost</th>
+        </tr>
+      </thead>
+      <tbody id="anomaly-table-body" class="bg-white divide-y divide-gray-200"></tbody>
+    </table>
+  </div>
+</section>
+
+<script type="text/javascript">
+    // --- 1. GLOBAL STATE AND DATA INITIALIZATION ---
+    const CS_CENTER_LAT = 30.6280;
+    const CS_CENTER_LNG = -96.3344;
+
+    // ** CRITICAL FIX: Teachable Machine Model URL **
+    // The link below has been updated to the user-provided URL.
+    const TM_URL = "https://teachablemachine.withgoogle.com/models/D7bQ4vyOY/";
+    // -------------------------------------------------------------------------------------------------
+
+    // Default anomalies (starting data)
+    let anomalies = [
+        { id: 101, type: 'Pothole (Initial)', severity: 'Severe', lat: CS_CENTER_LAT + 0.005, lng: CS_CENTER_LNG + 0.005, road: 'Texas Ave', est_cost: 1200 },
+        { id: 102, type: 'Alligator Cracking', severity: 'Moderate', lat: CS_CENTER_LAT - 0.002, lng: CS_CENTER_LNG - 0.008, road: 'University Dr', est_cost: 750 },
+    ];
+    let nextAnomalyId = 201; // Start new IDs from a higher number
+
+    let map; // Leaflet map instance
+    let currentMarkers = new L.LayerGroup(); // LayerGroup for markers
+    let activeRowElement = null; // Global to track the currently highlighted table row
+    let filters = { severities: ['Severe', 'Moderate', 'Minor'], minCost: 0 };
+
+    // Teachable Machine Variables
+    let model, webcam, labelContainer, maxPredictions;
+    let isWebcamRunning = false;
+    let lastAnomalyTime = 0; // Throttling for detection
+    const MIN_DETECTION_INTERVAL = 3000; // 3 seconds delay between creating new anomalies
+    
+    // Variable to manage the automatic stop timeout
+    let detectionTimeoutId = null;
+
+    // --- GEOLOCATION LOGIC (NEW) ---
+
+    /**
+     * Uses the browser's geolocation API to get the current position.
+     * Returns a promise that resolves with the position object or rejects with an error.
+     */
+    function getCurrentPosition() {
+        return new Promise((resolve, reject) => {
+            if (!navigator.geolocation) {
+                return reject(new Error("Geolocation is not supported by your browser."));
+            }
+            // Request current position with high accuracy and a short timeout
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true,
+                timeout: 5000, // 5 seconds
+                maximumAge: 0 // Don't use a cached position
+            });
+        });
+    }
+
+    // --- 2. TEABLE MACHINE LOGIC (MODIFIED) ---
+    async function init() {
+        if (isWebcamRunning) {
+            // Stop logic
+            if (webcam) {
+                webcam.stop();
+            }
+            isWebcamRunning = false;
+            document.getElementById("webcam-container").innerHTML = '';
+            document.getElementById("label-container").innerHTML = 'Detection stopped.';
+
+            // Clear the automatic stop timer if it's running
+            if (detectionTimeoutId) {
+                clearTimeout(detectionTimeoutId);
+                detectionTimeoutId = null;
+            }
+
+            const button = document.getElementById("detection-button");
+            button.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" class="w-5 h-5 mr-2"><path stroke-linecap="round" stroke-linejoin="round" d="M15.042 21.672 13.684 15.65a2.25 2.25 0 0 1-.599-1.591v-2.903m0-1.834h-2.5m10.232 4.05v.243l-2.757 2.757m0-7.382H13.684m5.253 10.158a10.5 10.5 0 1 1-20.081-3.214m2.022 3.214 2.103-2.103" /></svg> Start Webcam Detection';
+            button.classList.replace('bg-green-600', 'bg-indigo-600');
+            return;
+        }
+
+        const button = document.getElementById("detection-button");
+        button.disabled = true;
+        button.innerHTML = '<svg class="animate-spin h-5 w-5 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Loading Model...';
+        showLoading(true, "Activating webcam and loading Teachable Machine model...");
+
+        try {
+            // NOTE: We no longer await location here, it's fetched on detection.
+            
+            const modelURL = TM_URL + "model.json";
+            const metadataURL = TM_URL + "metadata.json";
+
+            model = await tmImage.load(modelURL, metadataURL);
+            maxPredictions = model.getTotalClasses();
+
+            const flip = true;
+            webcam = new tmImage.Webcam(200, 200, flip);
+            await webcam.setup(); // Request webcam access
+            await webcam.play();
+
+            document.getElementById("webcam-container").innerHTML = ''; // Clear placeholder
+            document.getElementById("webcam-container").appendChild(webcam.canvas);
+
+            labelContainer = document.getElementById("label-container");
+            labelContainer.innerHTML = '';
+            for (let i = 0; i < maxPredictions; i++) {
+                labelContainer.appendChild(document.createElement("div"));
+            }
+
+            isWebcamRunning = true;
+            window.requestAnimationFrame(loop);
+
+            // Set timeout to automatically stop detection after 5 seconds
+            detectionTimeoutId = setTimeout(() => {
+                console.log("5-second detection window expired. Stopping webcam automatically.");
+                if (isWebcamRunning) { // Only stop if it's still running
+                    init(); // Call init() to trigger the stop logic
+                }
+            }, 5000); // 5000 milliseconds = 5 seconds
+
+            button.innerHTML = 'Stop Detection'; // Change button text to stop detection
+            button.classList.replace('bg-indigo-600', 'bg-green-600');
+            button.disabled = false;
+            showLoading(false);
+
+        } catch (error) {
+            console.error("Error loading Teachable Machine model or starting webcam:", error);
+            // Clear timeout in case it was set before the final play() failed
+            if (detectionTimeoutId) {
+                clearTimeout(detectionTimeoutId);
+                detectionTimeoutId = null;
+            }
+            // Using a simple modal approach instead of alert()
+            // Show the error in the loading overlay
+            showLoading(true, `Error: ${error.message.substring(0, 100)}. Please check console.`);
+            // Hide loading overlay after 5 seconds
+            setTimeout(() => showLoading(false), 5000); 
+
+            button.innerHTML = 'Start Webcam Detection (Model Load Failed)';
+            button.classList.replace('bg-green-600', 'bg-red-600');
+            button.disabled = false;
+            showLoading(false);
+            isWebcamRunning = false;
+        }
+    }
+
+    async function loop() {
+        if (!isWebcamRunning) return;
+        webcam.update();
+        await predict();
+        window.requestAnimationFrame(loop);
+    }
+
+    async function predict() {
+        // Check if webcam is still active before predicting
+        if (!isWebcamRunning || !webcam || !webcam.canvas) return;
+
+        const prediction = await model.predict(webcam.canvas);
+        let highestConfidence = { className: 'No Damage', probability: 0 };
+
+        // Use .children for a reliable list of HTML element nodes (safer than .childNodes)
+        const nodes = labelContainer.children;
+
+        for (let i = 0; i < maxPredictions; i++) {
+            // Handle cases where prediction array might be off
+            if (!prediction[i]) continue;
+            
+            const className = prediction[i].className;
+            const probability = prediction[i].probability;
+            const classPrediction = `${className}: ${(probability * 100).toFixed(1)}%`;
+
+            const node = nodes[i];
+            
+            // Crucial check: if the model has more classes than created label containers, skip.
+            // This prevents the TypeError when accessing properties of an undefined node.
+            if (!node) {
+                console.warn(`Label node missing for prediction index ${i}. Model classes: ${maxPredictions}, Nodes available: ${nodes.length}`);
+                continue; 
+            }
+
+            node.innerHTML = classPrediction;
+            // Highlight the most confident prediction
+            if (probability > 0.85) {
+                node.style.backgroundColor = 'rgba(79, 70, 229, 0.1)'; // Indigo 100
+                node.style.color = '#4f46e5'; // Indigo 600
+            } else {
+                node.style.backgroundColor = '#f3f4f6';
+                node.style.color = '#1f2937';
+            }
+
+
+            // Track highest confidence for damage
+            // NOTE: This logic assumes your TM classes for damage contain keywords like 'damage', 'pothole', or 'crack'.
+            if (className.toLowerCase().includes('damage') || className.toLowerCase().includes('pothole') || className.toLowerCase().includes('crack') || className.toLowerCase() !== 'background') {
+                if (probability > highestConfidence.probability) {
+                    highestConfidence = { className, probability };
+                }
+            }
+        }
+
+        // If high-confidence damage is detected, process it
+        const DAMAGE_THRESHOLD = 0.85; // 85% confidence required to log an anomaly
+        if (highestConfidence.probability > DAMAGE_THRESHOLD) {
+            // Use await here as processWebcamPrediction is now async
+            await processWebcamPrediction(highestConfidence.className, highestConfidence.probability);
+        }
+    }
+
+
+    // --- 3. ANOMALY GENERATION & DATA HANDLING (MODIFIED) ---
+
+    function getAnomalyDetailsFromClass(className) {
+        // Map Teachable Machine class names to structured data
+        const roadNames = ["University Dr", "Texas Ave", "Harvey Rd", "Wellborn Rd", "Southwood Dr", "FM 2154"];
+        const road = roadNames[Math.floor(Math.random() * roadNames.length)];
+
+        // Simple mapping based on expected classes (adjust this to your actual TM classes)
+        if (className.toLowerCase().includes('pothole') || className.toLowerCase().includes('severe')) {
+            return { type: 'Deep Pothole', severity: 'Severe', est_cost: Math.floor(Math.random() * 2000) + 2000, road };
+        } else if (className.toLowerCase().includes('crack') || className.toLowerCase().includes('alligator')) {
+            return { type: 'Alligator Cracking', severity: 'Moderate', est_cost: Math.floor(Math.random() * 700) + 800, road };
+        } else {
+            // Default to minor for other damage types
+            return { type: 'Surface Deterioration', severity: 'Minor', est_cost: Math.floor(Math.random() * 300) + 100, road };
+        }
+    }
+
+    // MODIFIED: Made async to await geolocation
+    async function processWebcamPrediction(className, confidence) {
+        const now = Date.now();
+        if (now - lastAnomalyTime < MIN_DETECTION_INTERVAL) {
+            console.log("Detection throttled.");
+            return;
+        }
+
+        lastAnomalyTime = now;
+
+        const details = getAnomalyDetailsFromClass(className);
+
+        // --- NEW: Use Geolocation if available, otherwise fallback ---
+        let lat, lng;
+        let locationSource = 'GPS';
+        
+        try {
+            // NEW: Get current position *at the moment of detection*
+            const position = await getCurrentPosition();
+            const userLocation = {
+                lat: position.coords.latitude,
+                lng: position.coords.longitude
+            };
+            
+            // Use current GPS location with a tiny random offset to prevent stacking
+            const offset = (Math.random() * 0.0001) - 0.00005; // +/- 5 meters approximation
+            lat = userLocation.lat + offset;
+            lng = userLocation.lng + offset;
+            console.log("Current location acquired:", userLocation);
+
+        } catch (error) {
+            // Fallback to College Station random location (original logic)
+            lat = CS_CENTER_LAT + (Math.random() * 0.05 - 0.025);
+            lng = CS_CENTER_LNG + (Math.random() * 0.05 - 0.025);
+            locationSource = 'Fallback (CS)';
+            
+            console.warn("Could not retrieve current position:", error.message);
+            const message = error.code === error.PERMISSION_DENIED
+                ? "Geolocation denied. Using College Station fallback."
+                : "Could not get GPS. Using College Station fallback.";
+            console.warn(message);
+            // We won't show a popup here, as it would be annoying on every detection.
+            // The console log is sufficient for debugging.
+        }
+        
+        console.log(`New anomaly location source: ${locationSource}`);
+        // -------------------------------------------------------------
+
+        const newAnomaly = {
+            id: nextAnomalyId++,
+            ...details,
+            lat: parseFloat(lat.toFixed(6)),
+            lng: parseFloat(lng.toFixed(6)),
+        };
+
+        anomalies.push(newAnomaly);
+
+        // Center map on new anomaly location
+        if (map) {
+            map.setView([newAnomaly.lat, newAnomaly.lng], 15);
+            L.popup({ closeButton: false, autoClose: true })
+                .setLatLng([newAnomaly.lat, newAnomaly.lng])
+                .setContent(`New Anomaly Detected (${locationSource}): <b>${newAnomaly.type}</b> (Conf: ${(confidence * 100).toFixed(0)}%)`)
+                .openOn(map);
+        }
+
+        console.log("New anomaly logged:", newAnomaly);
+        updateAllViews();
+    }
+
+
+    // --- 4. PRIORITY & VISUAL LOGIC (Restored for Interactivity) ---
+
+    function getSeverityProperties(severity) {
+        switch (severity) {
+            case 'Severe': return { color: '#dc2626', score: 90, label: 'P1 - Urgent' };
+            case 'Moderate': return { color: '#f59e0b', score: 60, label: 'P2 - Necessary' };
+            case 'Minor':
+            default: return { color: '#10b981', score: 30, label: 'P3 - Scheduled' };
+        }
+    }
+
+    function calculateFinalPriority(damage) {
+        let { score } = getSeverityProperties(damage.severity);
+        // Add a slight bonus for major roads
+        if (damage.road.includes('Texas Ave') || damage.road.includes('University Dr')) score += 5;
+        return Math.min(100, score);
+    }
+
+    function applyFiltersToData(data) {
+        const { severities, minCost } = filters;
+        return data.filter(item => severities.includes(item.severity) && item.est_cost >= minCost);
+    }
+
+    function getFilteredAndPrioritizedData() {
+        const filteredData = applyFiltersToData(anomalies);
+        return filteredData.map(d => ({
+            ...d,
+            priorityScore: calculateFinalPriority(d),
+            ...getSeverityProperties(d.severity)
+        })).sort((a,b) => b.priorityScore - a.priorityScore);
+    }
+
+    window.applyFilters = function() {
+        const severityCheckboxes = document.querySelectorAll('#severity-filters input[type="checkbox"]');
+        filters.severities = Array.from(severityCheckboxes).filter(cb => cb.checked).map(cb => cb.value);
+        filters.minCost = parseInt(document.getElementById('cost-slider').value);
+        updateAllViews();
+    };
+
+
+    // --- 5. UI / Map Functions ---
+
+    function showLoading(visible, message = "Processing...") {
+        const overlay = document.getElementById('loading-overlay');
+        const textElement = overlay.querySelector('p');
+        if (textElement) textElement.textContent = message;
+
+        if (visible) {
+            overlay.classList.add('visible');
+        } else {
+            overlay.classList.remove('visible');
+        }
+    }
+
+    function updateCostValue(v) {
+        document.getElementById("cost-value").innerText = `$${v}`;
+    }
+
+    function updateAllViews() {
+        const finalDamageList = getFilteredAndPrioritizedData();
+        updateDashboardStats(anomalies.map(d => ({ ...d, ...getSeverityProperties(d.severity) })));
+        renderAnomalyLog(finalDamageList);
+        if (map && currentMarkers) renderMarkers(finalDamageList);
+        else console.warn("Map not ready; markers skipped.");
+    }
+
+    function initMap() {
+        if (map) { try { map.remove(); } catch(e){ /* ignore */ } }
+
+        map = L.map('map').setView([CS_CENTER_LAT, CS_CENTER_LNG], 13);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '&copy; <a href="http://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors | RoadAI College Station'
+        }).addTo(map);
+
+        currentMarkers.addTo(map);
+
+        requestAnimationFrame(() => map.invalidateSize(true));
+        window.addEventListener('resize', () => map.invalidateSize(true));
+
+        // Add map legend
+        const legend = L.control({ position: 'bottomright' });
+        legend.onAdd = function(map) {
+            const div = L.DomUtil.create('div', 'info legend');
+            div.className = 'legend';
+            const severities = ['Severe', 'Moderate', 'Minor'];
+            for (let i=0;i<severities.length;i++){
+                const props = getSeverityProperties(severities[i]);
+                div.innerHTML += '<i style="background:' + props.color + '"></i> ' + severities[i] + ' (' + props.label.split(' - ')[0] + ')<br>';
+            }
+            return div;
+        };
+        legend.addTo(map);
+
+        updateAllViews();
+    }
+
+    function renderMarkers(prioritizedDamage) {
+        currentMarkers.clearLayers();
+
+        prioritizedDamage.forEach(item => {
+            const colorClass = item.severity === "Severe" ? "icon-severe" : item.severity === "Moderate" ? "icon-moderate" : "icon-minor";
+            const customIcon = L.divIcon({
+                className: colorClass,
+                html: `<span class="text-xs">!</span>`,
+                iconSize: [24,24],
+                iconAnchor: [12,24]
+            });
+
+            const popupContent = `
+                <div class="font-sans text-sm p-1">
+                    <h3 class="font-bold text-base mb-1 text-indigo-700">${item.type} (ID: ${item.id})</h3>
+                    <p class="mb-1"><strong>Road:</strong> ${item.road}</p>
+                    <p class="mb-1"><strong>Severity:</strong> <span style="color: ${item.color}; font-weight: bold;">${item.severity}</span></p>
+                    <p class="mb-1"><strong>Priority:</strong> <span class="font-extrabold">${item.label} (${item.priorityScore}/100)</span></p>
+                    <p class="mb-1"><strong>Est. Repair Cost:</strong> $${item.est_cost.toLocaleString()}</p>
+                    <p class="text-xs mt-2 text-gray-500">Lat: ${item.lat.toFixed(4)}, Lng: ${item.lng.toFixed(4)}</p>
+                </div>
+            `;
+
+            const marker = L.marker([item.lat, item.lng], { icon: customIcon })
+                .bindPopup(popupContent)
+                .addTo(currentMarkers);
+
+            marker.on('click', () => {
+                map.panTo([item.lat, item.lng]);
+            });
+        });
+    }
+
+    function updateDashboardStats(fullDamageList) {
+        const totals = fullDamageList.reduce((acc, curr) => {
+            const severityKey = curr.severity.toLowerCase();
+            acc.counts[severityKey] = (acc.counts[severityKey] || 0) + 1;
+            acc.costs[severityKey] = (acc.costs[severityKey] || 0) + curr.est_cost;
+            acc.costs.total = (acc.costs.total || 0) + curr.est_cost;
+            return acc;
+        }, { counts: {}, costs: { severe: 0, moderate: 0, minor: 0, total: 0 } });
+
+        const formatCurrency = (amount) => `$${Math.round(amount).toLocaleString('en-US')}`;
+
+        document.getElementById('total-anomalies').textContent = fullDamageList.length;
+        document.getElementById('severe-count').textContent = totals.counts.severe || 0;
+        document.getElementById('moderate-count').textContent = totals.counts.moderate || 0;
+        document.getElementById('minor-count').textContent = totals.counts.minor || 0;
+
+        document.getElementById('total-cost').textContent = formatCurrency(totals.costs.total);
+        document.getElementById('severe-cost').textContent = `Cost: ${formatCurrency(totals.costs.severe || 0)}`;
+        document.getElementById('moderate-cost').textContent = `Cost: ${formatCurrency(totals.costs.moderate || 0)}`;
+        document.getElementById('minor-cost').textContent = `Cost: ${formatCurrency(totals.costs.minor || 0)}`;
+    }
+
+    function renderAnomalyLog(prioritizedDamage) {
+        const tbody = document.getElementById('anomaly-table-body');
+        if (!tbody) return;
+        tbody.innerHTML = '';
+
+        if (activeRowElement) {
+            activeRowElement.classList.remove('bg-indigo-100');
+            activeRowElement = null;
+        }
+
+        if (prioritizedDamage.length === 0) {
+            const row = tbody.insertRow();
+            const cell = row.insertCell();
+            cell.colSpan = 6;
+            cell.innerHTML = '<div class="text-center py-4 text-gray-500 font-medium">No anomalies match the current filter criteria.</div>';
+            cell.classList.add('px-4','py-4','text-sm');
+            return;
+        }
+
+        prioritizedDamage.forEach(item => {
+            const row = tbody.insertRow();
+
+            let rowBgClass = 'hover:bg-indigo-50/50';
+            if (item.severity === 'Severe') { rowBgClass = 'hover:bg-red-100/70'; }
+            else if (item.severity === 'Moderate') rowBgClass = 'hover:bg-amber-50/50';
+            else if (item.severity === 'Minor') rowBgClass = 'hover:bg-emerald-50/50';
+
+            row.classList.add(...[rowBgClass, 'transition', 'duration-150', 'cursor-pointer']);
+
+            const barWidth = `${item.priorityScore}%`;
+            const props = getSeverityProperties(item.severity);
+
+            const cells = [
+                item.id,
+                item.type,
+                item.road,
+                `<span class="px-2 inline-flex text-xs leading-5 font-semibold rounded-full" style="background-color: ${props.color}1A; color: ${props.color};">${item.severity}</span>`,
+                `<div class="flex items-center space-x-2">
+                    <div class="w-20 bg-gray-200 rounded-full h-2">
+                        <div class="h-2 rounded-full" style="width: ${barWidth}; background-color: ${props.color};"></div>
+                    </div>
+                    <span class="font-bold text-gray-700">${item.priorityScore}</span>
+                </div>`,
+                `$${item.est_cost.toLocaleString()}`
+            ];
+
+            cells.forEach((content, index) => {
+                const cell = row.insertCell();
+                cell.innerHTML = content;
+                cell.classList.add('px-4','py-4','text-sm','text-gray-500');
+                if (index === 0) cell.classList.add('font-semibold','text-gray-700');
+                if (index === 1) cell.classList.add('text-gray-900');
+                if (index === 5) cell.classList.add('text-right','font-medium','text-gray-900');
+            });
+
+            row.addEventListener('click', () => {
+                if (map) map.setView([item.lat, item.lng], 16, { animate: true });
+                
+                if (activeRowElement) {
+                    activeRowElement.classList.remove('bg-indigo-100');
+                }
+                row.classList.add('bg-indigo-100');
+                activeRowElement = row;
+            });
+        });
+    }
+
+    // --- 6. BOOTSTRAP / EXECUTION (MODIFIED) ---
+    document.getElementById("detection-button").addEventListener("click", init);
+    
+    // Initial setup on load
+    window.onload = function() {
+        initMap();
+        updateCostValue(document.getElementById('cost-slider').value);
+        
+        // --- NEW: Attempt to get user location just to center the map ---
+        getCurrentPosition().then(position => {
+            if (map) {
+                map.setView([position.coords.latitude, position.coords.longitude], 14, { animate: true });
+                L.popup({ closeButton: false, autoClose: true })
+                    .setLatLng([position.coords.latitude, position.coords.longitude])
+                    .setContent("Map centered on your location.")
+                    .openOn(map);
+            }
+        }).catch(error => {
+            console.warn("Could not center map on user:", error.message);
+            // Show a popup on the map informing the user about the fallback
+            if(map) {
+                const message = error.code === error.PERMISSION_DENIED
+                    ? "Geolocation denied. Centering on College Station."
+                    : "Could not get GPS. Centering on College Station.";
+                L.popup({ closeButton: false, autoClose: true })
+                    .setLatLng([CS_CENTER_LAT, CS_CENTER_LNG])
+                    .setContent(message)
+                    .openOn(map);
+            }
+        });
+    };
+</script>
+</body>
+</html>
+
